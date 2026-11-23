@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Breakout — one prompt, one game</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Breakout, variant B: a single self-contained page. No network, no fonts, no libs. */
+  html, body { margin: 0; padding: 0; background: #0d1026; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; font-family: sans-serif; }
+  #wrap { width: min(96vw, 960px); }
+  canvas { display: block; width: 100%; height: auto; background: #101736;
+           border: 3px solid #3d4a8f; border-radius: 10px; }
+  #hint { color: #9aa7ff; text-align: center; font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="hint">Move the paddle with your mouse or the arrow keys &middot; click or press Space to launch the ball</div>
+</div>
+<script>
+'use strict';
+// ---------------------------------------------------------------------------
+// Tiny Breakout, built from one prompt:
+// "Build a tiny Breakout game I can play in my browser: move the paddle with
+//  mouse or arrow keys, bounce the ball, break all the bricks, 3 lives, score
+//  and win screen."
+//
+// ?demo=1 turns on autopilot: the paddle steers itself, the ball launches on
+// its own, and the game plays itself so real gameplay can be recorded.
+// ---------------------------------------------------------------------------
+
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const DEMO = new URLSearchParams(location.search).get('demo') === '1';
+
+// --- tuning ---------------------------------------------------------------
+const PADDLE_W = 110, PADDLE_H = 14, PADDLE_Y = H - 42;
+const BALL_R = 9;
+const BALL_SPEED = DEMO ? 430 : 330;   // demo plays a little faster for capture
+const ROWS = 5, COLS = 10;
+const BRICK_W = 84, BRICK_H = 24, BRICK_GAP = 6;
+const BRICK_TOP = 64;
+const ROW_COLORS = ['#ff5d5d', '#ff9f43', '#ffd32a', '#2ed573', '#1e90ff'];
+const ROW_POINTS = [50, 40, 30, 20, 10]; // top rows are worth more
+
+// --- state ----------------------------------------------------------------
+let state = 'title';        // title | playing | win | over
+let score = 0, lives = 3;
+let paddleX = (W - PADDLE_W) / 2;
+let paddleDir = 0;          // -1 / 0 / +1 from arrow keys
+let ball = { x: W / 2, y: PADDLE_Y - BALL_R - 1, vx: 0, vy: 0, stuck: true };
+let bricks = [];
+let flash = 0;              // brief white flash when a brick breaks
+let bounces = 0;            // paddle bounces so far (demo wobble uses this)
+
+function buildBricks() {
+  bricks = [];
+  const totalW = COLS * BRICK_W + (COLS - 1) * BRICK_GAP;
+  const x0 = (W - totalW) / 2;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      bricks.push({
+        x: x0 + c * (BRICK_W + BRICK_GAP),
+        y: BRICK_TOP + r * (BRICK_H + BRICK_GAP),
+        w: BRICK_W, h: BRICK_H, alive: true,
+        color: ROW_COLORS[r], points: ROW_POINTS[r],
+      });
+    }
+  }
+}
+
+function launchBall() {
+  // Fixed launch angle in demo mode so the recording is deterministic.
+  const angle = DEMO ? -Math.PI / 3 : -Math.PI / 2 + (Math.random() - 0.5) * 0.9;
+  ball.vx = Math.cos(angle) * BALL_SPEED;
+  ball.vy = Math.sin(angle) * BALL_SPEED;
+  ball.stuck = false;
+}
+
+function resetBall() {
+  ball.x = paddleX + PADDLE_W / 2;
+  ball.y = PADDLE_Y - BALL_R - 1;
+  ball.vx = 0; ball.vy = 0; ball.stuck = true;
+}
+
+function startGame() {
+  score = 0; lives = 3;
+  buildBricks();
+  paddleX = (W - PADDLE_W) / 2;
+  resetBall();
+  state = 'playing';
+  if (DEMO) launchBall();
+}
+
+// --- input ----------------------------------------------------------------
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') e.preventDefault();
+  keys[e.key] = true;
+  if (e.key === ' ') {
+    if (state === 'title' || state === 'win' || state === 'over') startGame();
+    else if (ball.stuck) launchBall();
+  }
+});
+window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+cv.addEventListener('mousemove', (e) => {
+  const r = cv.getBoundingClientRect();
+  paddleX = ((e.clientX - r.left) / r.width) * W - PADDLE_W / 2;
+  paddleX = Math.max(0, Math.min(W - PADDLE_W, paddleX));
+});
+cv.addEventListener('click', () => {
+  if (state === 'title' || state === 'win' || state === 'over') startGame();
+  else if (ball.stuck) launchBall();
+});
+
+// --- update ---------------------------------------------------------------
+function update(dt) {
+  if (state !== 'playing') return;
+
+  // Paddle: autopilot in demo, keys / mouse otherwise.
+  if (DEMO) {
+    const target = ball.x - PADDLE_W / 2;
+    const maxStep = 560 * dt;
+    paddleX += Math.max(-maxStep, Math.min(maxStep, target - paddleX));
+  } else {
+    if (keys['ArrowLeft']) paddleDir = -1;
+    else if (keys['ArrowRight']) paddleDir = 1;
+    else paddleDir = 0;
+    paddleX += paddleDir * 520 * dt;
+  }
+  paddleX = Math.max(0, Math.min(W - PADDLE_W, paddleX));
+
+  if (ball.stuck) {
+    ball.x = paddleX + PADDLE_W / 2;
+    ball.y = PADDLE_Y - BALL_R - 1;
+    return;
+  }
+
+  ball.x += ball.vx * dt;
+  ball.y += ball.vy * dt;
+  if (flash > 0) flash -= dt;
+
+  // Walls.
+  if (ball.x < BALL_R) { ball.x = BALL_R; ball.vx = Math.abs(ball.vx); }
+  if (ball.x > W - BALL_R) { ball.x = W - BALL_R; ball.vx = -Math.abs(ball.vx); }
+  if (ball.y < BALL_R) { ball.y = BALL_R; ball.vy = Math.abs(ball.vy); }
+
+  // Paddle bounce: angle depends on where the ball hits the paddle.
+  // In demo mode a small deterministic wobble keeps the ball from looping
+  // forever up one cleared column, so the recording keeps breaking bricks.
+  if (ball.vy > 0 &&
+      ball.y + BALL_R >= PADDLE_Y && ball.y + BALL_R <= PADDLE_Y + PADDLE_H + 8 &&
+      ball.x >= paddleX - BALL_R && ball.x <= paddleX + PADDLE_W + BALL_R) {
+    const hit = (ball.x - (paddleX + PADDLE_W / 2)) / (PADDLE_W / 2); // -1..1
+    bounces += 1;
+    const wobble = DEMO ? Math.sin(bounces * 1.7) * 0.3 : 0;
+    const angle = -Math.PI / 2 + hit * 1.1 + wobble;
+    ball.vx = Math.cos(angle) * BALL_SPEED;
+    ball.vy = Math.sin(angle) * BALL_SPEED;
+    ball.y = PADDLE_Y - BALL_R - 1;
+  }
+
+  // Bricks.
+  for (const b of bricks) {
+    if (!b.alive) continue;
+    if (ball.x + BALL_R > b.x && ball.x - BALL_R < b.x + b.w &&
+        ball.y + BALL_R > b.y && ball.y - BALL_R < b.y + b.h) {
+      b.alive = false;
+      score += b.points;
+      flash = 0.08;
+      // Bounce off the side the ball came from.
+      const prevY = ball.y - ball.vy * dt;
+      if (prevY + BALL_R <= b.y || prevY - BALL_R >= b.y + b.h) ball.vy = -ball.vy;
+      else ball.vx = -ball.vx;
+      break;
+    }
+  }
+
+  // Win?
+  if (bricks.every((b) => !b.alive)) { state = 'win'; return; }
+
+  // Lost the ball.
+  if (ball.y - BALL_R > H) {
+    lives -= 1;
+    if (lives <= 0) { state = 'over'; return; }
+    resetBall();
+    if (DEMO) launchBall();
+  }
+}
+
+// --- draw -----------------------------------------------------------------
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function draw() {
+  ctx.fillStyle = '#101736';
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle starfield backdrop.
+  ctx.fillStyle = 'rgba(255,255,255,0.16)';
+  for (let i = 0; i < 40; i++) {
+    const sx = (i * 173) % W, sy = (i * 97) % 300 + 8;
+    ctx.fillRect(sx, sy, 2, 2);
+  }
+
+  // HUD: score left, lives right.
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('SCORE  ' + score, 20, 38);
+  ctx.textAlign = 'right';
+  ctx.fillText('♥'.repeat(lives) + '  LIVES ' + lives, W - 20, 38);
+
+  // Bricks.
+  for (const b of bricks) {
+    if (!b.alive) continue;
+    ctx.fillStyle = b.color;
+    roundRect(b.x, b.y, b.w, b.h, 5);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(b.x + 4, b.y + 3, b.w - 8, 5);
+  }
+
+  // Paddle.
+  ctx.fillStyle = '#e8ecff';
+  roundRect(paddleX, PADDLE_Y, PADDLE_W, PADDLE_H, 7);
+  ctx.fill();
+  ctx.fillStyle = '#7c8cff';
+  ctx.fillRect(paddleX + 8, PADDLE_Y + 4, PADDLE_W - 16, 4);
+
+  // Ball.
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffd32a';
+  ctx.beginPath();
+  ctx.arc(ball.x - 2, ball.y - 2, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (flash > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Overlays.
+  ctx.textAlign = 'center';
+  if (state === 'title') {
+    ctx.fillStyle = 'rgba(10,12,40,0.72)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ffd32a';
+    ctx.font = 'bold 64px sans-serif';
+    ctx.fillText('BREAKOUT', W / 2, 210);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '26px sans-serif';
+    ctx.fillText('Break every brick. Don\'t drop the ball.', W / 2, 262);
+    ctx.fillStyle = '#9aa7ff';
+    ctx.font = '22px sans-serif';
+    ctx.fillText('Mouse or arrow keys to move  •  3 lives  •  click or Space to play', W / 2, 312);
+    if (DEMO) {
+      ctx.fillStyle = '#2ed573';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.fillText('AUTOPILOT DEMO — the agent plays itself', W / 2, 360);
+    }
+  } else if (state === 'win') {
+    ctx.fillStyle = 'rgba(10,12,40,0.66)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#2ed573';
+    ctx.font = 'bold 58px sans-serif';
+    ctx.fillText('YOU WIN!', W / 2, 240);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '28px sans-serif';
+    ctx.fillText('All bricks cleared — final score ' + score, W / 2, 292);
+    ctx.fillStyle = '#9aa7ff';
+    ctx.font = '20px sans-serif';
+    ctx.fillText('Press Space to play again', W / 2, 332);
+  } else if (state === 'over') {
+    ctx.fillStyle = 'rgba(10,12,40,0.66)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ff5d5d';
+    ctx.font = 'bold 58px sans-serif';
+    ctx.fillText('GAME OVER', W / 2, 240);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '28px sans-serif';
+    ctx.fillText('Final score ' + score, W / 2, 292);
+    ctx.fillStyle = '#9aa7ff';
+    ctx.font = '20px sans-serif';
+    ctx.fillText('Press Space to try again', W / 2, 332);
+  } else if (ball.stuck) {
+    ctx.fillStyle = '#9aa7ff';
+    ctx.font = '22px sans-serif';
+    ctx.fillText('Click or press Space to launch', W / 2, H - 90);
+  }
+}
+
+// --- main loop ------------------------------------------------------------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+buildBricks();
+if (DEMO) startGame();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

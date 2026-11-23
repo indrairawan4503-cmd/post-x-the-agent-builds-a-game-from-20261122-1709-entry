@@ -1,0 +1,11 @@
+# Build + capture artefacts — never part of the submitted snapshot.
+video.mp4
+out/
+frames/
+seg/
+capture.mjs
+test-keys.mjs
+endcard-16x9.mp4
+endcard-16x9.webm
+press-manifest.json
+press-llms.txt
